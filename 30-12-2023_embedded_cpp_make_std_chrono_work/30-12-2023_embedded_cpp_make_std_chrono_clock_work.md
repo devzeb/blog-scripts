@@ -7,14 +7,9 @@ Hint: This article is a work in progress. I am still working on it. But if you h
 - The implementation of `_gettimeofday` has to return the current time since the epoch (in this case start of the system) in the struct `timeval` and return 0.
 - To obtain the current time, you can set up a timer interrupt that increments a counter variable, which then is used to fill the struct `timeval` in the `_gettimeofday` implementation.
 
-# Please consider supporting me
-If you like this article and want to support me, you can do so by buying me a coffee, pizza or other developer essentials by clicking the button below:
-<form action="https://www.paypal.com/donate" method="post" target="_top">
-<input type="hidden" name="hosted_button_id" value="TGDGATFR63N3G" />
-<input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif" border="0" name="submit" title="PayPal - The safer, easier way to pay online!" alt="Donate with PayPal button" />
-<img alt="" border="0" src="https://www.paypal.com/en_DE/i/scr/pixel.gif" width="1" height="1" />
-</form>
-
+# Is this article helpful?
+If you like this article and want to support me, you can do so by buying me a coffee, pizza or other developer essentials by clicking the this link:
+[Support me on PayPal](https://www.paypal.com/donate/?hosted_button_id=TGDGATFR63N3G)
 
 # Environment 
 The code you see in this article is compiled with the arm-none-eabi-g++ cross compiler for the Cortex M platform, using the Newlib Nano C standard library implementation.
