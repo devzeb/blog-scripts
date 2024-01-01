@@ -7,9 +7,9 @@ Hint: This article is a work in progress. I am still working on it. But if you h
 - The implementation of `_gettimeofday` has to return the current time since the epoch (in this case start of the system) in the struct `timeval` and return 0.
 - To obtain the current time, you can set up a timer interrupt that increments a counter variable, which then is used to fill the struct `timeval` in the `_gettimeofday` implementation.
 
-# Is this article helpful?
-If you like this article and want to support me, you can do so by buying me a coffee, pizza or other developer essentials by clicking the this link:
-[Support me on PayPal](https://www.paypal.com/donate/?hosted_button_id=TGDGATFR63N3G)
+# Did you find this article helpful?
+If you like this article and want to support me, you can do so by buying me a coffee, pizza or other developer essentials by clicking this link:
+[Support me with PayPal](https://www.paypal.com/donate/?hosted_button_id=TGDGATFR63N3G)
 
 # Environment 
 The code you see in this article is compiled with the arm-none-eabi-g++ cross compiler for the Cortex M platform, using the Newlib Nano C standard library implementation.
@@ -64,8 +64,8 @@ As the error originates from the Newlib Nano library, we can find a hint to the 
 This means that `gettimeofday` is an *OS subroutine*, which is another name for *system call*.
 So `gettimeofday` is a function that is supposed to interact with the operating system.
 
-Many other platforms provide this particular system call to interact with the OS, e.g. the [Linux kernel]((https://man7.org/linux/man-pages/man2/syscalls.2.html)).
-The function is also part of the [POSIX operating system standard](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/functions/gettimeofday.html).
+On many other platforms, this system call is implemented and interacts with the OS, e.g. the [Linux kernel]((https://man7.org/linux/man-pages/man2/syscalls.2.html)).
+The function is also part of the [POSIX operating system standard](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/functions/gettimeofday.html). This means that it is supposed to be available on all POSIX compliant operating systems.
 
 However, on the Cortex M platform, we do not have an operating system kernel that is able to provide the current time.
 Therefore, this function is nowhere to be found in the platform specific version of the newlib C standard library (`libg_nano.a` in this case).
@@ -103,27 +103,29 @@ struct timeval {
 };
 ```
 
-So the `struct timeval` contains both seconds and microseconds since the epoch. 
+The `struct timeval` contains both seconds and microseconds since the epoch. 
 The epoch is usually defined as January 1st, 1970, 00:00:00 UTC. 
-In our case though, we have no way of knowing the current date, so we have to define the epoch as the start of the system.
-Therefore, we have to obtain the number of seconds and microseconds since the start of the system.
+In our case though, we have no way of knowing the current date, as this information is not available on the microcontroller. Therefore, we define the epoch ourselves as the start of the system. \
+So, in order to properly fill the struct timeval, we have to obtain the number of seconds and microseconds since the start of the system.
 
 ## Obtaining the number of seconds and microseconds since the start of the system
-Two possible ways of counting the time since the start of the system are:
-- use a timer peripheral together with an interrupt to increment a "time counter" variable
+There are multiple possible ways of getting this information.
+Two possibilities are to:
+- use a timer peripheral together with an interrupt to increment a *time counter* variable
 - use a real time clock (RTC) peripheral
 
-As most Cortex M microcontrollers do include a timer peripheral, I chose to use the interrupt based approach.
+As most Cortex M microcontrollers include a timer peripheral, I chose to use the interrupt based approach for this example.
 
 ## Implementation
-To increment the "time counter" variable on our bare metal system, we have to:
-- Implement a "time counter" function that increments the "time counter" variable
-- Initialize the timer to issue an interrupt every with a fixed interval (e.g. 1ms)
-- Implement an interrupt handler to call the function.
+To make std::chrono work on our bare metal system, we have to:
+- Implement a *time counter* function that increments a *time counter* variable
+- Implement _gettimeofday to return the content of the *time counter* variable
+- Initialize a timer to issue an interrupt with a fixed interval (e.g. 1ms)
+- Implement the timer interrupt handler to call the *time counter* function
 
-When your system uses a RTOS, you can even use the already existing RTOS tick function to call the "time counter" function.
+> When your system uses a RTOS, a periodically invoked *tick function* is usually already available. In this case, you can just call the *time counter* function from within the *tick function*.
 
-## Implementing the "time counter" function
+## Implementing the *time counter* function
 ```cpp
 namespace 
 {
@@ -158,12 +160,15 @@ void on_microseconds_passed(const TMicroseconds microseconds)
   }
 }
 ```
-I chose to use two counter variables for seconds and microseconds, because it is required by the struct timeval.
-The variables are updated from the timer interrupt, so they need to be atomic.
-I also made sure that the atomics can be used without support for locks, because the Cortex M platform does not support locks out of the box. In order to achieve this, the type of TSeconds must not be larger than 32 bits, because the Cortex M platform does not support atomic operations on 64 bit variables.
-Therefore, that max number of seconds that can be counted is 4294967295 seconds, which is equal to 136,1 years. This is enough for my particular use case.
+I chose to use two counter variables for seconds and microseconds, because it is required by the struct timeval. This enables me to express a wider range of time values than if I would use only one variable as a microseconds or milliseconds time counter.
 
-### Implementing the `gettimeofday` function
+The variables are updated from the timer interrupt, so they must be updated atomically to prevent data races (= undefined behavior), according to the [C++ language standard](https://en.cppreference.com/w/cpp/language/memory_model).
+
+The `static_assert` expressions make sure that the atomics can be used without support for locks, because the Newlib Nano C standard library does not support locks out of the box. 
+As a 64 bit variable would require a lock to be updated atomically on the Cortex M platform, I use an unsigned 32-bit integer for  TSeconds instead.
+This has the side effect, that the highest value expressible by the variable is 4294967295 seconds, which is equal to 136,1 years. This is enough for my particular use case, as I do not expect the system to run for more than this timespan.
+
+### Implementing the `_gettimeofday` function
 With this code in place, we can now implement the `_gettimeofday` function:
 
 ```cpp
@@ -185,7 +190,7 @@ In order to implement the timer interrupt, I use the [stm32g4xx_hal library](htt
 We just have to call the `on_microseconds_passed` function from the interrupt handler:
 
 ```cpp
-// note: even tough the original implementation is in C, I am using C++
+// note: even tough the example implementation is written in C, I am using C++
 extern "C" {
   void TIM6_DAC_IRQHandler()
   {
@@ -199,10 +204,10 @@ extern "C" {
 }
 ```
 
-I am using the "on_microseconds_passed" function, even though the timer interrupt is called every 1ms. This is so you can adapt this example to your needs, e.g. if you have a sub-millisecond resolution for your particular use case.
+>I am using the `on_microseconds_passed` function, even though the timer interrupt only has millisecond resolution. This is so you can adapt this example more easily to your needs, e.g. if you have a sub-millisecond resolution for your particular use case.
 
 ## Full source code example
-As I mentioned before, you can find the full source code example in my [embedded_template repository](https://github.com/devzeb/embedded_template) at the branch named `gettimeofday-stm32g4`. Look at the files `embedded_template/gettimeofday.cpp` and `embedded_template/stm32g4xx_hal_timebase_tim.cpp` from the repository root.
+As I mentioned before, you can find the full source code example in my [embedded_template repository](https://github.com/devzeb/embedded_template) at the branch named `gettimeofday-stm32g4`. Look at the files [gettimeofday.cpp](https://github.com/devzeb/embedded_template/blob/gettimeofday-stm32g4/embedded_template/gettimeofday.cpp) and [stm32g4xx_hal_timebase_tim.cpp](https://github.com/devzeb/embedded_template/blob/gettimeofday-stm32g4/embedded_template/stm32g4xx_hal_timebase_tim.cpp).
 
 # Conclusion
 With everything implemented, the adaption is complete. I can now use `std::chrono::steady_clock::now()` on my Cortex M microcontroller:
@@ -232,13 +237,14 @@ int main() {
 
 # Additional information
 ## What is libg_nano.a?
-According to this site: https://www.sourceware.org/legacy-ml/newlib/2011/msg00647.html
-- `libg` is a debugging-enabled libc.
-- `libc` is the C standard library.
+
+- `libc` is the [C standard library](https://en.wikipedia.org/wiki/C_standard_library).
+- `libg` is a debugging-enabled libc, according to [this comment](https://www.sourceware.org/legacy-ml/newlib/2011/msg00647.html).
+- The suffix `_nano` indicates that the Newlib Nano library is used instead of the bigger Newlib library.
 
 Therefore, `libg_nano.a` is a debugging-enabled libc from the Newlib Nano project.
 
-Newlib can be found here: https://sourceware.org/newlib/
+The Newlib [official webpage](https://sourceware.org/newlib/) explains that:  
 
 > Newlib is a C library intended for use on embedded systems.
 
@@ -252,9 +258,9 @@ From [this section of the newlib documentation](https://sourceware.org/newlib/li
 > 
 > These hooks use the structure _reent defined in reent.h. A variable defined as ‘struct _reent’ is called a reentrancy structure. All functions which must manipulate global information are available in two versions. The first version has the usual name, and uses a single global instance of the reentrancy structure. The second has a different name, normally formed by prepending ‘_’ and appending ‘_r’, and takes a pointer to the particular reentrancy structure to use.
 
-This is the reason why the system call `gettimeofday` is actually implemented as a trampoline function to the reentrant version `_gettimeofday_r`, which then calls the actual system call function `_gettimeofday`.
+This is the reason why the system call `gettimeofday` is actually implemented as a trampoline function to the reentrant version `_gettimeofday_r`, which then calls the actual system call implementation `_gettimeofday`.
 
-To sum it up: Newlib renamed the actual system call function from `gettimeofday` to `_gettimeofday` to enable the function to be reentrant.
+To sum it up: Newlib renamed the actual system call implementation from `gettimeofday` to `_gettimeofday` to enable the function to be reentrant.
 Both `gettimeofday` and `_gettimeofday` have the same signature and the documentation of `gettimeofday` is also valid for `_gettimeofday`.
 
 If you want more information about this, look at the section [Proof that the _gettimeofday is the actual system call function](#proof-that-the-_gettimeofday-is-the-actual-system-call-function).
@@ -263,8 +269,7 @@ If you want more information about this, look at the section [Proof that the _ge
 
 ## Proof that the _gettimeofday is the actual system call function
 
-The following comments are based on the following revision of newlib:
-- website: https://sourceware.org/newlib/
+The following comments are based on the this revision of newlib:
 - git repo: https://sourceware.org/git/newlib-cygwin.git
 - git revision: `1a177610d8e181d09206a5a8ce2d873822751657`
 
@@ -283,7 +288,7 @@ int _gettimeofday (struct timeval *__p, void *__tz);
 
 
 We can also find a stub implementation of `_gettimeofday` in `libgloss/libnosys/gettod.c`:
-When you look closely at the file path, you can see that this implementation is not part of newlibs libc, but part of libgloss. Libgloss is a library that provides the low level functions for a specific target. In this case, the target is `nosys`, which means that the target does not provide any system calls. Therefore, the implementation of `_gettimeofday` is a stub that returns an error.
+If you look closely at the file path, you can see that this implementation is not part of newlibs libc, but part of libgloss. Libgloss is a library that provides the low level functions for a specific target. In this case, the target is *nosys*, which means that the target does not provide any system calls. Therefore, the implementation of `_gettimeofday` is a stub that returns an error.
 
 ```c
 int
