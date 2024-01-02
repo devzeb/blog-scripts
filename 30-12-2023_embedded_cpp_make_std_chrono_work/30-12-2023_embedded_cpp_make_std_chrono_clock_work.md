@@ -1,4 +1,4 @@
-# Embedded CPP - Make std::chrono clock work with Newlib Nano on the Cortex M platform
+# Embedded CPP - Make std::chrono clock work with Newlib Nano on the Cortex-M platform
 
 # TL;DR
 > If you are just interested in looking at the working code, see the [full source code example](#full-source-code-example) at the end of this article.
@@ -71,7 +71,7 @@ So `gettimeofday` is a function that is supposed to interact with the operating 
 On many other platforms, this system call is implemented and interacts with the OS, e.g. the [Linux kernel]((https://man7.org/linux/man-pages/man2/syscalls.2.html)).
 The function is also part of the [POSIX operating system standard](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/functions/gettimeofday.html). This means that it is supposed to be available on all POSIX compliant operating systems.
 
-However, on the Cortex M platform, we do not have an operating system kernel that is able to provide the current time.
+However, on the Cortex-M platform, we do not have an operating system kernel that is able to provide the current time.
 Therefore, this function is nowhere to be found in the platform specific version of the Newlib Nano C standard library.
 
 If you are wondering why the linker did not complain about the function `gettimeofday`, but `_gettimeofday`, you can find the answer in the section [Why did the linker not complain about gettimeofday, but _gettimeofday?](#why-did-the-linker-not-complain-about-gettimeofday-but-_gettimeofday).
@@ -117,7 +117,7 @@ Two possibilities are to:
 - use a timer peripheral together with an interrupt to increment a *time counter* variable
 - use a real time clock (RTC) peripheral
 
-As most Cortex M microcontrollers include a timer peripheral, I chose to use the interrupt based approach for this example.
+As most Cortex-M microcontrollers include a timer peripheral, I chose to use the interrupt based approach for this example.
 
 # Implementation
 To make std::chrono work on our bare metal system, we have to:
@@ -135,7 +135,7 @@ namespace
   // use the type of timeval::tv_usec to make sure that the type is compatible with the struct timeval
   using TMicroseconds = decltype(std::declval<timeval>().tv_usec);
 
-  // not using TSeconds = decltype(std::declval<timeval>().tv_sec) because it's internally a long long (int64_t), which is not compatible with std::atomic on the cortex m platform
+  // not using TSeconds = decltype(std::declval<timeval>().tv_sec) because it's internally a long long (int64_t), which is not compatible with std::atomic on the Cortex-M platform
   using TSeconds = std::uint32_t; //  4294967295 seconds = 136,1 years -> max uptime of 136 years is enough
 
   // updated from the timer interrupt, so the variables need to be atomic
@@ -168,7 +168,7 @@ I chose to use two counter variables for seconds and microseconds, because it is
 The variables are updated from the timer interrupt, so they must be updated atomically to prevent data races (= undefined behavior), according to the [C++ language standard](https://en.cppreference.com/w/cpp/language/memory_model).
 
 The `static_assert` expressions make sure that the atomics can be used without support for locks, because the Newlib Nano C standard library does not support locks out of the box. 
-As a 64 bit variable would require a lock to be updated atomically on the Cortex M platform, I use an unsigned 32-bit integer for TSeconds instead.
+As a 64 bit variable would require a lock to be updated atomically on the Cortex-M platform, I use an unsigned 32-bit integer for TSeconds instead.
 This has the side effect, that the highest value expressible by the variable is 4294967295 seconds, which is equal to 136,1 years. This is enough for my particular use case, as I do not expect the system to run for more than this timespan.
 
 ## Implementing the `_gettimeofday` function
@@ -213,7 +213,7 @@ extern "C" {
 As I mentioned before, you can find the full source code example in my [embedded_template repository](https://github.com/devzeb/embedded_template) at the branch named `gettimeofday-stm32g4`. Look at the files [gettimeofday.cpp](https://github.com/devzeb/embedded_template/blob/gettimeofday-stm32g4/embedded_template/gettimeofday.cpp) and [stm32g4xx_hal_timebase_tim.cpp](https://github.com/devzeb/embedded_template/blob/gettimeofday-stm32g4/embedded_template/stm32g4xx_hal_timebase_tim.cpp).
 
 # Conclusion
-With everything implemented, the adaption is complete. I can now use `std::chrono::steady_clock::now()` on my Cortex M microcontroller:
+With everything implemented, the adaption is complete. I can now use `std::chrono::steady_clock::now()` on my Cortex-M microcontroller:
   
 ```cpp
 #include "stm32g4xx_hal_timebase_tim.h"
