@@ -1,4 +1,4 @@
-# Embedded CPP - Make std::chrono clock work with Newlib Nano on the Cortex-M platform
+# Embedded C++ - Make std::chrono clock work with Newlib Nano on the Cortex-M platform
 
 # TL;DR
 > If you are just interested in looking at the working code, see the [full source code example](#full-source-code-example) at the end of this article.
@@ -8,7 +8,7 @@
 - To obtain the current time, you can set up a timer interrupt that increments a counter variable, which then is used to fill the struct `timeval` in the `_gettimeofday` implementation.
 
 
-# Did you find this article helpful?
+# Was this article helpful?
 If you like this article and want to support me, you can do so by buying me a coffee, pizza or other developer essentials by clicking this link:
 [Support me with PayPal](https://www.paypal.com/donate/?hosted_button_id=TGDGATFR63N3G)
 
@@ -68,7 +68,7 @@ As the error originates from the Newlib Nano library, we can find a hint to the 
 This means that `gettimeofday` is an *OS subroutine*, which is another name for *system call*.
 So `gettimeofday` is a function that is supposed to interact with the operating system.
 
-On many other platforms, this system call is implemented and interacts with the OS, e.g. the [Linux kernel]((https://man7.org/linux/man-pages/man2/syscalls.2.html)).
+On many other platforms, this system call is implemented and interacts with the OS, e.g. the [Linux kernel](https://man7.org/linux/man-pages/man2/syscalls.2.html).
 The function is also part of the [POSIX operating system standard](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/functions/gettimeofday.html). This means that it is supposed to be available on all POSIX compliant operating systems.
 
 However, on the Cortex-M platform, we do not have an operating system kernel that is able to provide the current time.
@@ -171,7 +171,7 @@ The `static_assert` expressions make sure that the atomics can be used without s
 As a 64 bit variable would require a lock to be updated atomically on the Cortex-M platform, I use an unsigned 32-bit integer for TSeconds instead.
 This has the side effect, that the highest value expressible by the variable is 4294967295 seconds, which is equal to 136,1 years. This is enough for my particular use case, as I do not expect the system to run for more than this timespan.
 
-## Implementing the `_gettimeofday` function
+## Implementing the _gettimeofday function
 With this code in place, we can now implement the `_gettimeofday` function:
 
 ```cpp
@@ -254,7 +254,7 @@ The Newlib [official webpage](https://sourceware.org/newlib/) explains that:
 The Newlib Nano project is a subset of the Newlib project, providing the C standard library for embedded systems.
 
 
-## Why did the linker not complain about `gettimeofday`, but `_gettimeofday`? 
+## Why did the linker not complain about gettimeofday, but _gettimeofday? 
 This has to do with the fact, that Newlib provides a reentrant version of the C standard library functions.
 From [this section of the Newlib documentation](https://sourceware.org/newlib/libc.html#Reentrancy).
 > Reentrancy is a characteristic of library functions which allows multiple processes to use the same address space with assurance that the values stored in those spaces will remain constant between calls. The Red Hat newlib implementation of the library functions ensures that whenever possible, these library functions are reentrant. However, there are some functions that can not be trivially made reentrant. Hooks have been provided to allow you to use these functions in a fully reentrant fashion.
