@@ -1,19 +1,25 @@
 Hint: This article is a work in progress. I am still working on it. But if you have any questions, feel free to contact me.
 
-# Embedded CPP - Make std::chrono clock work with Newlib Nano on Cortex M
+# Embedded CPP - Make std::chrono clock work with Newlib Nano on the Cortex M platform
 
 # TL;DR
+> If you are just interested in looking at the working code, see the [full source code example](#full-source-code-example) at the end of this article.
+
 - In order to make `std::chrono` work with Newlib Nano, you have to implement the system call `_gettimeofday`.
 - The implementation of `_gettimeofday` has to return the current time since the epoch (in this case start of the system) in the struct `timeval` and return 0.
 - To obtain the current time, you can set up a timer interrupt that increments a counter variable, which then is used to fill the struct `timeval` in the `_gettimeofday` implementation.
+
 
 # Did you find this article helpful?
 If you like this article and want to support me, you can do so by buying me a coffee, pizza or other developer essentials by clicking this link:
 [Support me with PayPal](https://www.paypal.com/donate/?hosted_button_id=TGDGATFR63N3G)
 
 # Environment 
-The code you see in this article is compiled with the arm-none-eabi-g++ cross compiler for the Cortex M platform, using the Newlib Nano C standard library implementation.
-The exact flags and command are listed in the sections [Compile and link commands used](#compile-and-link-commands-used) and [Environment](#environment).
+- ARM GNU Toolchain (arm-none-eabi) (I am using version 13.2)
+- Git repository: https://github.com/devzeb/embedded_template
+- Git branch: `gettimeofday-stm32g4`
+
+The compiler and linker flags used can be found at [this section](#compiler-and-linker-flags-used) or at the CMake files of the repository. 
 
 # What is the problem with using std::chrono with Newlib Nano?
 
@@ -33,11 +39,11 @@ int main()
 Trying to compile this code yields the following linker error:
 
 ```
-C:/Users/seb/opt/arm-gnu-toolchain-13.2.rel1-mingw-w64-i686-arm-none-eabi/bin/../lib/gcc/arm-none-eabi/13.2.1/../../../../arm-none-eabi/bin/ld.exe: C:/Users/seb/opt/arm-gnu-toolchain-13.2.rel1-mingw-w64-i686-arm-none-eabi/bin/../lib/gcc/arm-none-eabi/13.2.1/thumb/v7e-m+dp/hard\libg_nano.a(libc_a-gettimeofdayr.o): in function `_gettimeofday_r':
+/opt/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/bin/../lib/gcc/arm-none-eabi/13.2.1/../../../../arm-none-eabi/bin/ld: /opt/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/bin/../lib/gcc/arm-none-eabi/13.2.1/../../../../arm-none-eabi/lib/thumb/nofp/libg_nano.a(libc_a-gettimeofdayr.o): in function `_gettimeofday_r':
 
 gettimeofdayr.c:(.text._gettimeofday_r+0xe): undefined reference to `_gettimeofday'
 
-collect2.exe: error: ld returned 1 exit status
+collect2: error: ld returned 1 exit status
 ```
 
 The linker is missing the function `_gettimeofday`, therefore the linking process fails.
@@ -68,14 +74,13 @@ On many other platforms, this system call is implemented and interacts with the 
 The function is also part of the [POSIX operating system standard](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/functions/gettimeofday.html). This means that it is supposed to be available on all POSIX compliant operating systems.
 
 However, on the Cortex M platform, we do not have an operating system kernel that is able to provide the current time.
-Therefore, this function is nowhere to be found in the platform specific version of the newlib C standard library (`libg_nano.a` in this case).
+Therefore, this function is nowhere to be found in the platform specific version of the Newlib Nano C standard library.
 
-If you are wondering, why the linker did not complain about the function `gettimeofday`, but `_gettimeofday`, you can find the answer in the section [Why did the linker not complain about gettimeofday, but _gettimeofday?](#why-did-the-linker-not-complain-about-gettimeofday-but-_gettimeofday).
+If you are wondering why the linker did not complain about the function `gettimeofday`, but `_gettimeofday`, you can find the answer in the section [Why did the linker not complain about gettimeofday, but _gettimeofday?](#why-did-the-linker-not-complain-about-gettimeofday-but-_gettimeofday).
 
-# Implementing _gettimeofday to make std::chrono work
-> For the example implementation, I am using the Nucleo-STM32G474RE board from STMicroelectronics. If you just want to look at the result, you can find the code in my [embedded_template repository](https://github.com/devzeb/embedded_template) at the branch named `gettimeofday-stm32g4`. Look at the files `embedded_template/gettimeofday.cpp` and `embedded_template/stm32g4xx_hal_timebase_tim.cpp`.
+# Concept to make std::chrono work
 
-Now that we know that `_gettimeofday` is missing to make std::chrono::steady_clock::now() work, we can implement it ourselves.
+Now that we know that `_gettimeofday` is missing to make std::chrono::steady_clock::now() work, we have to implement it ourselves.
 
 From the documentation of `gettimeofday` in the [POSIX standard](https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/functions/gettimeofday.html), we can find out what the function is supposed to do:
 
@@ -91,7 +96,7 @@ This means we have to do two things in our implementation of `_gettimeofday`:
 - modify the pointer struct timeval to contain the current time since the epoch
 - return 0 to indicate success
 
-The timezone struct is defined in the include file `sys/_timeval.h` (in the newlib repository: `newlib/libc/include/sys/_timeval.h`):
+The timezone struct is defined in the include file `sys/_timeval.h` (in the Newlib repository: `newlib/libc/include/sys/_timeval.h`):
 
 ```c
 /*
@@ -116,10 +121,10 @@ Two possibilities are to:
 
 As most Cortex M microcontrollers include a timer peripheral, I chose to use the interrupt based approach for this example.
 
-## Implementation
+# Implementation
 To make std::chrono work on our bare metal system, we have to:
 - Implement a *time counter* function that increments a *time counter* variable
-- Implement _gettimeofday to return the content of the *time counter* variable
+- Implement `_gettimeofday` to return the content of the *time counter* variable
 - Initialize a timer to issue an interrupt with a fixed interval (e.g. 1ms)
 - Implement the timer interrupt handler to call the *time counter* function
 
@@ -165,10 +170,10 @@ I chose to use two counter variables for seconds and microseconds, because it is
 The variables are updated from the timer interrupt, so they must be updated atomically to prevent data races (= undefined behavior), according to the [C++ language standard](https://en.cppreference.com/w/cpp/language/memory_model).
 
 The `static_assert` expressions make sure that the atomics can be used without support for locks, because the Newlib Nano C standard library does not support locks out of the box. 
-As a 64 bit variable would require a lock to be updated atomically on the Cortex M platform, I use an unsigned 32-bit integer for  TSeconds instead.
+As a 64 bit variable would require a lock to be updated atomically on the Cortex M platform, I use an unsigned 32-bit integer for TSeconds instead.
 This has the side effect, that the highest value expressible by the variable is 4294967295 seconds, which is equal to 136,1 years. This is enough for my particular use case, as I do not expect the system to run for more than this timespan.
 
-### Implementing the `_gettimeofday` function
+## Implementing the `_gettimeofday` function
 With this code in place, we can now implement the `_gettimeofday` function:
 
 ```cpp
@@ -184,8 +189,8 @@ extern "C" {
 ```
 This implementation is trivial. We just fill the required variables of the struct timeval with our counter variables and return 0 to indicate success.
 
-### Implementing the timer interrupt
-In order to implement the timer interrupt, I use the [stm32g4xx_hal library](https://github.com/STMicroelectronics/stm32g4xx_hal_driver) from STMicroelectronics. The hal provides an [example implementation](https://github.com/STMicroelectronics/stm32g4xx_hal_driver/blob/master/Src/stm32g4xx_hal_timebase_tim_template.c) of a timer interrupt, that is executed every 1ms.
+## Implementing the timer interrupt
+In order to implement the timer interrupt, I use the [stm32g4xx_hal library](https://github.com/STMicroelectronics/stm32g4xx_hal_driver) from STMicroelectronics. The HAL provides an [example implementation](https://github.com/STMicroelectronics/stm32g4xx_hal_driver/blob/master/Src/stm32g4xx_hal_timebase_tim_template.c) of a timer interrupt, that is executed every 1ms.
 
 We just have to call the `on_microseconds_passed` function from the interrupt handler:
 
@@ -206,7 +211,7 @@ extern "C" {
 
 >I am using the `on_microseconds_passed` function, even though the timer interrupt only has millisecond resolution. This is so you can adapt this example more easily to your needs, e.g. if you have a sub-millisecond resolution for your particular use case.
 
-## Full source code example
+# Full source code example
 As I mentioned before, you can find the full source code example in my [embedded_template repository](https://github.com/devzeb/embedded_template) at the branch named `gettimeofday-stm32g4`. Look at the files [gettimeofday.cpp](https://github.com/devzeb/embedded_template/blob/gettimeofday-stm32g4/embedded_template/gettimeofday.cpp) and [stm32g4xx_hal_timebase_tim.cpp](https://github.com/devzeb/embedded_template/blob/gettimeofday-stm32g4/embedded_template/stm32g4xx_hal_timebase_tim.cpp).
 
 # Conclusion
@@ -248,12 +253,12 @@ The Newlib [official webpage](https://sourceware.org/newlib/) explains that:
 
 > Newlib is a C library intended for use on embedded systems.
 
-The Newlib Nano project is a subset of the newlib project, providing the C standard library for embedded systems.
+The Newlib Nano project is a subset of the Newlib project, providing the C standard library for embedded systems.
 
 
 ## Why did the linker not complain about `gettimeofday`, but `_gettimeofday`? 
-This has to do with the fact, that newlib provides a reentrant version of the C standard library functions.
-From [this section of the newlib documentation](https://sourceware.org/newlib/libc.html#Reentrancy).
+This has to do with the fact, that Newlib provides a reentrant version of the C standard library functions.
+From [this section of the Newlib documentation](https://sourceware.org/newlib/libc.html#Reentrancy).
 > Reentrancy is a characteristic of library functions which allows multiple processes to use the same address space with assurance that the values stored in those spaces will remain constant between calls. The Red Hat newlib implementation of the library functions ensures that whenever possible, these library functions are reentrant. However, there are some functions that can not be trivially made reentrant. Hooks have been provided to allow you to use these functions in a fully reentrant fashion.
 > 
 > These hooks use the structure _reent defined in reent.h. A variable defined as ‘struct _reent’ is called a reentrancy structure. All functions which must manipulate global information are available in two versions. The first version has the usual name, and uses a single global instance of the reentrancy structure. The second has a different name, normally formed by prepending ‘_’ and appending ‘_r’, and takes a pointer to the particular reentrancy structure to use.
@@ -269,7 +274,7 @@ If you want more information about this, look at the section [Proof that the _ge
 
 ## Proof that the _gettimeofday is the actual system call function
 
-The following comments are based on the this revision of newlib:
+The following comments are based on this revision of Newlib:
 - git repo: https://sourceware.org/git/newlib-cygwin.git
 - git revision: `1a177610d8e181d09206a5a8ce2d873822751657`
 
@@ -288,7 +293,7 @@ int _gettimeofday (struct timeval *__p, void *__tz);
 
 
 We can also find a stub implementation of `_gettimeofday` in `libgloss/libnosys/gettod.c`:
-If you look closely at the file path, you can see that this implementation is not part of newlibs libc, but part of libgloss. Libgloss is a library that provides the low level functions for a specific target. In this case, the target is *nosys*, which means that the target does not provide any system calls. Therefore, the implementation of `_gettimeofday` is a stub that returns an error.
+If you look closely at the file path, you can see that this implementation is not part of Newlibs libc, but part of libgloss. Libgloss is a library that provides the low level functions for a specific target. In this case, the target is *nosys*, which means that the target does not provide any system calls. Therefore, the implementation of `_gettimeofday` is a stub that returns an error.
 
 ```c
 int
@@ -332,30 +337,16 @@ _gettimeofday_r (struct _reent *ptr,
 And there is the call to `_gettimeofday`!
 
 
-## Compile and link commands used
-
-- Cortex M7 (STM32H7) 
-- arm-none-eabi-g++ version 13.2
-
-```bash
-arm-none-eabi-g++.exe   -g -std=gnu++20 -fdiagnostics-color=always --specs=nano.specs -mthumb -ffunction-sections -fdata-sections -fno-rtti -fno-exceptions -fno-common -fno-non-call-exceptions -fno-use-cxa-atexit -MD -MT embedded_template/CMakeFiles/embedded_template.dir/gettimeofday.cpp.obj -MF embedded_template\CMakeFiles\embedded_template.dir\gettimeofday.cpp.obj.d -o embedded_template/CMakeFiles/embedded_template.dir/gettimeofday.cpp.obj -c C:/Users/seb/code/embedded_template/embedded_template/gettimeofday.cpp
-
-arm-none-eabi-g++.exe   -g -std=gnu++20 -fdiagnostics-color=always --specs=nano.specs -mthumb -ffunction-sections -fdata-sections -fno-rtti -fno-exceptions -fno-common -fno-non-call-exceptions -fno-use-cxa-atexit -MD -MT embedded_template/CMakeFiles/embedded_template.dir/main.cpp.obj -MF embedded_template\CMakeFiles\embedded_template.dir\main.cpp.obj.d -o embedded_template/CMakeFiles/embedded_template.dir/main.cpp.obj -c C:/Users/seb/code/embedded_template/embedded_template/main.cpp
-
-arm-none-eabi-g++.exe -g --specs=nano.specs -mthumb -Wl,--gc-sections -Wl,--print-memory-usage embedded_template/CMakeFiles/embedded_template.dir/main.cpp.obj embedded_template/CMakeFiles/embedded_template.dir/gettimeofday.cpp.obj -o embedded_template\embedded_template
-
-```
+## Compiler and linker flags used 
 
 
-## Environment
-- ARM GNU Toolchain (arm-none-eabi) (I am using version 13.2)
-- Git repository: https://github.com/devzeb/embedded_template
-
-Compiler:
+Compiler flags:
+arm-none-eabi-g++:
 - `-std=gnu++20`
+- `-fdiagnostics-color=always`
 - `--specs=nano.specs`
 - `-mthumb`
-- `-mcpu=cortex-m7`
+- `-mcpu=cortex-m4`
 - `-mfloat-abi=hard`
 - `-ffunction-sections`
 - `-fdata-sections`
@@ -365,11 +356,14 @@ Compiler:
 - `-fno-non-call-exceptions`
 - `-fno-use-cxa-atexit`
 
-Linker:
+Linker flags:
+arm-none-eabi-g++:
 - `--specs=nano.specs`
 - `-mthumb`
-- `-mcpu=cortex-m7`
+- `-mcpu=cortex-m4`
 - `-mfloat-abi=hard`
 - `-Wl,--gc-sections`
 - `-Wl,--print-memory-usage`
-- `-Wl,-Tembedded_template/device/stm32h723/STM32H723ZGTX_FLASH.ld`
+- `-Wl,-T/home/seb/code/embedded_template/device/stm32g474/STM32G474RETX_FLASH.ld`
+
+
