@@ -1,5 +1,3 @@
-Hint: This article is a work in progress. I am still working on it. But if you have any questions, feel free to contact me.
-
 # Embedded CPP - Make std::chrono clock work with Newlib Nano on the Cortex M platform
 
 # TL;DR
