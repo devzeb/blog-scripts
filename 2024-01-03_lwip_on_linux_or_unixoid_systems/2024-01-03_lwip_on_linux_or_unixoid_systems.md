@@ -1,9 +1,13 @@
 # lwIP on Linux or Unix systems
 
+# TL;DR
+> If you are just interested in looking at the working code, see the [full source code example repository](https://github.com/devzeb/example_lwip_linux_unix) on my GitHub.
+
+**todo** add steps to make it work
+
 # Disclaimer
 I have not tested this port on another system than Linux, therefore I cannot guarantee that it will work on any Unix based system.
 The name of the port is *unix*, so I expect the steps described here to work on any Unix based system.
-
 
 
 # Motivation
@@ -25,6 +29,9 @@ The following steps are required to make it work:
 # Implementation
 ## Make lwIP compile by supplying the configuration file `lwipopts.h`
 ### Creating / choosing a `lwipopts.h` file
+> You can find the complete configuration file [in the repository of this example.](https://github.com/devzeb/example_lwip_linux_unix/blob/main/port_configuration/lwip/lwipopts.h)
+
+
 [This directory](https://github.com/lwip-tcpip/lwip/tree/STABLE-2_2_0_RELEASE/contrib/ports/unix/lib) of the Unix port contains a README file that states:
 > This directory contains an example of how to compile lwIP as a shared library
 on Linux.
@@ -95,10 +102,87 @@ Your mileage may vary, so feel free to enable it if you want to try it.
 #define LWIP_DBG_TYPES_ON ( LWIP_DBG_ON | LWIP_DBG_TRACE | LWIP_DBG_STATE | LWIP_DBG_FRESH | LWIP_DBG_HALT )
 ```
 
+## Configure a TAP network interface and register it as the default network interface in lwIP
+
+lwIP needs a (default) network interface to in order to send and receive network packets.
+You can register multiple interfaces in lwIP, but only one can be the default interface, which is used for any outgoing packets that do not match a specific (better suited) route.
+Therefore, we need to register a network interface in lwIP and make it default.
+
+In order to register the default network interface in lwIP, two steps are required:
+- initialize the interface by calling `netif_add`
+- set the initialized interface as the default network interface by calling `netif_set_default`
 
 
 
-# A little bit of background information about TAP / TUN interfaces
+### Initialize the network interface
+I once again used the [example code from the Unix port](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/example_app/default_netif.c) and adapted it to my needs:
+
+#### Implement the network interface initialization function
+```cpp
+void init_default_netif(const ip4_addr_t* ipaddr, const ip4_addr_t* netmask, const ip4_addr_t* gw)
+{
+    netif_add(&default_network_interface, ipaddr, netmask, gw, nullptr, tapif_init, tcpip_input);
+
+    netif_set_default(&default_network_interface);
+}
+```
+
+As you can see, we are passing `tapif_init` as the network initialization function parameter (`netif_init_fn`).
+
+This function is then invoked by lwIP as soon as the network interface needs to be initialized.
+
+When this function is called, multiple things happen:
+- A new TAP device (file) is created on the host system. On Linux, the default device is `/dev/net/tun`, and it has the interface name `tap0`. The default settings can be changed by redefining the macros `DEVTAP_DEFAULT_IF` and `DEVTAP`. This operation requires the application to run with root privileges, but there is an alternative way. See [this section](#create-the-tap-device-before-starting-the-application-make-the-application-not-require-root-privileges) for more information.
+- A new thread is started that continuously reads from the TAP device (= polling) and passes the received data to lwIP by calling `tapif_input`.
+
+See [this file](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/port/netif/tapif.c) for the implementation of the mechanism described above.
+
+#### Make the file c++ compatible
+Unfortunately, the example code in the latest stable branch 2.2.0 of lwIP is not C++ compatible. I submitted a [pull request](https://github.com/lwip-tcpip/lwip/pull/26) in order to properly fix this issue, but until then, we have to fix it manually in the user code by adding a `extern "C"` block around the include header:
+```cpp
+extern "C" {
+    #include "netif/tapif.h"
+}
+```
+
+if we don't do this, and we include the header in a C++ file, we get the following error:
+```
+lwip_linux_unix_tap_network_interface.cpp:(.text+0x2f): undefined reference to `tapif_init(netif*)'
+lwip_linux_unix_tap_network_interface.cpp:(.text+0x7c): undefined reference to `tapif_poll(netif*)'
+```
+
+In addition to that, we also need to add the `extern "C"` block around the `default_netif_poll` and `default_netif_shutdown` functions, as they are called from within the lwip stack.
+
+```cpp
+extern "C" {
+void default_netif_poll(void)
+{
+    ...
+}
+
+void default_netif_shutdown(void)
+{
+    ...
+}
+}
+```
+
+#### 
+
+
+
+
+
+## Set the interface up to start operation
+
+
+
+
+
+# Additional information
+## Create the TAP device before starting the application (make the application not require root privileges)
+
+## A little bit of background information about TAP / TUN interfaces
 
 From [Wikipedia](https://en.wikipedia.org/wiki/TUN/TAP):
 
@@ -106,8 +190,6 @@ From [Wikipedia](https://en.wikipedia.org/wiki/TUN/TAP):
 
 
 
-
-# Additional information
 ## Other, apparently unused files that might be useful
 When browsing through the repository, I found other files that apparently contain alternative lwIP interfaces to the `tapif.c` file.
 
