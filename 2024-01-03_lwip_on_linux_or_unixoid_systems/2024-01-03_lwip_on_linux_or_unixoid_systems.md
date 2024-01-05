@@ -3,11 +3,19 @@
 # TL;DR
 > If you are just interested in looking at the working code, see the [full source code example repository](https://github.com/devzeb/example_lwip_linux_unix) on my GitHub.
 
-**todo** add steps to make it work
+To make lwIP work on Linux or other Unix based systems, the following steps are required:
+- compile lwIP with a configuration file that is suitable for Unix systems
+- initialize lwIP
+- use the lwIP supplied code to create a TAP network interface on the host system and register it as the default network interface in lwIP
+
+
+# Was this article helpful?
+If you like this article and want to support me, you can do so by buying me a coffee, pizza or other developer essentials by clicking this link:
+[Support me with PayPal](https://www.paypal.com/donate/?hosted_button_id=TGDGATFR63N3G)
 
 # Disclaimer
 I have not tested this port on another system than Linux, therefore I cannot guarantee that it will work on any Unix based system.
-The name of the port is *unix*, so I expect the steps described here to work on any Unix based system.
+The name of the lwIP port is *unix*, so I expect the steps described here to work on other Unix based systems as well.
 
 
 # Motivation
@@ -19,6 +27,8 @@ The *STABLE-2_2_0_RELEASE* tag of the [lwIP GitHub repository](https://github.co
 
 # Environment
 - Linux
+- Clang 16.0.6
+- lwIP version 2.2.0
 
 # How to use lwIP on Linux or other Unix based systems
 The following steps are required to make it work:
@@ -63,6 +73,15 @@ void lwip_init(void){
 ## Configure a TAP network interface and register it as the lwIP default network interface
 
 lwIP needs a (default) network interface to in order to send and receive network packets.
+On Linux / Unix, lwIP uses a so-called *TAP network interface* to communicate with the host system.
+
+From [Wikipedia](https://en.wikipedia.org/wiki/TUN/TAP):
+
+> Packets sent by an operating system via a TUN/TAP device are delivered to a user space program which attaches itself to the device. A user space program may also pass packets into a TUN/TAP device. In this case the TUN/TAP device delivers (or "injects") these packets to the operating-system network stack thus emulating their reception from an external source.
+
+I will further explain the TAP interface on the host system in [a later section](#what-effect-does-this-have-on-the-host-system).
+
+
 You can register multiple interfaces in lwIP, but only one can be the default interface, which is used for any outgoing packets that do not match a specific (better suited) route.
 Therefore, we need to register a network interface in lwIP and make it default.
 
@@ -98,12 +117,14 @@ As you can see, we are passing `tapif_init` as the network initialization functi
 This function is invoked by lwIP as soon as the network interface needs to be initialized.
 
 When `tapif_init` is called, multiple things happen:
-- A new TAP device is created on the host system. \
+- A new TAP interface is created on the host system. \
 (This operation requires the application to run with root privileges, which is a security concern. There is also the option of creating the TAP device (with root privileges) before starting the application. See [this section](#create-the-tap-device-before-starting-the-application-make-the-application-not-require-root-privileges) for more information.) \
 On Linux, the default device is `/dev/net/tun`, and it has the interface name `tap0`. The default settings can be changed by defining the macros `DEVTAP_DEFAULT_IF` and `DEVTAP` in either `lwipopts.h` or using compiler definitions (through the buildsystem).
 - A new thread is started that continuously reads from the TAP device (= polling) and passes the received data to lwIP by calling `tapif_input`.
 
-See [this file](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/port/netif/tapif.c) for the implementation of the mechanism described above.
+
+
+See [this file](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/port/netif/tapif.c) for the implementation of the mechanisms described above.
 
 
 #### Make the file c++ compatible
@@ -118,7 +139,7 @@ if we don't do this, and we include the header in a C++ file, we get the followi
 ```
 lwip_linux_unix_tap_network_interface.cpp:(.text+0x2f): undefined reference to `tapif_init(netif*)'
 ```
-This is because the compiler thinks, that `tapif_init` is a function with c++ linkage, because its header file does not contain the `extern "C"` block.
+This is because the compiler thinks that `tapif_init` is a function with c++ linkage, because its header file does not contain the `extern "C"` block.
 As its implementation is in a C file, it actually has C linkage, which makes the linker think that the function is not defined at all.
 
 #### Remove the other functions from the example code
@@ -181,7 +202,7 @@ I am using a std::array to display the IP address, default gateway and netmask i
 
 The functions `ip4_addr_set_u32` are used to fill the actual address from the array.
 
-#### What effect has this on the host system?
+#### What effect does this have on the host system?
 You might be wondering why we have to specify an IP address, default gateway and netmask, even though our host already (probably) has a network configuration?
 
 This is because we are creating the TAP interface, which serves as a completely separate network interface on the host system.
@@ -204,12 +225,12 @@ $ ip addr show
        valid_lft forever preferred_lft forever
 ```
 
-As you can see, the TAP interface `tap0` has been created and has the gateway address that we set in the `main` function of our application (192.168.115.1).
-The broadcast address of the TAP interface also matches our configured netmask (255.255.255.0).
+As you can see, the TAP interface named `tap0` has been created and is using the gateway address *192.168.115.1* that we set in the `main` function of our application.
+The broadcast address *255.255.255.0* of the TAP interface also matches our configured netmask.
 
 You can also see that the actual IP address of our application is not shown in the output of `ip addr show`. This is expected, because the command only shows the network interface, but not any hosts on these networks.
 
-In conclusion, after the application creates the TAP interface, our host is connected to another "virtual" network, which is completely separate from the other host network interfaces. Therefore, we have to choose a network configuration for this interface, which is not used by any other interface on the host.
+To sum it up: After the application creates the TAP interface, our host is connected to a new network, which is completely separate from the other host network interfaces. Keep in mind that the gateway address (and netmask) for this interface must not be used by any other network interface on the host system, otherwise the network configuration will be broken.
 
 ## Set the interface up to start operation
 Finally, we enable the interface in lwIP by calling `netif_set_up`:
@@ -223,7 +244,13 @@ int main()
     // set the interface up to start operation
     netif_set_up(&get_default_netif());
     UNLOCK_TCPIP_CORE();
-    ...
+
+    while (true)
+    {
+        // let this thread of execution wait forever (from https://stackoverflow.com/a/42644441 )
+        // the "lwip thread" will continue working in the background
+        std::promise<void>().get_future().wait();
+    }
 }
 ```
 
@@ -278,8 +305,52 @@ ethernet_output: sending packet 0x55f29ed1a698
 
 And there you have it, the lwIP network stack is running on Linux.
 
+# Full source code example
+You can find the [full source code example repository](https://github.com/devzeb/example_lwip_linux_unix) on my GitHub.
 
 # Additional information
+
+## Create the TAP device before starting the application (make the application not require root privileges)
+
+As mentioned before, the application needs to be run with root privileges in order to create the TAP device.
+This is a security concern, as the application can now do anything on the host system.
+
+To avoid this, we can create the TAP device before starting the application.
+
+The file [tapif.c](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/port/netif/tapif.c) states how to perform this:
+```c
+/*
+ * Creating a tap interface requires special privileges. If the interfaces
+ * is created in advance with `tunctl -u <user>` it can be opened as a regular
+ * user. The network must already be configured. If DEVTAP_IF is defined it
+ * will be opened instead of creating a new tap device.
+ *
+ * You can also use PRECONFIGURED_TAPIF environment variable to do so.
+ */
+```
+
+So if we execute the following command, the TAP interface is created:
+```shell
+$ sudo tunctl -u $USER
+Set 'tap0' persistent and owned by uid 1000
+```
+
+We can observe this by looking at the network interfaces:
+```
+$ ip addr show
+...
+13: tap0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN group default qlen 1000
+    link/ether 1a:6e:e3:96:fb:5a brd ff:ff:ff:ff:ff:ff
+```
+
+Now we can invoke the application without root privileges by specifying the environment variable `PRECONFIGURED_TAPIF` to contain the TAP interface name shown above:
+```shell
+$ PRECONFIGURED_TAPIF=tap0 ./example_lwip_linux_unix
+```
+
+Note that we still need root privileges to create the TAP interface, but we can now start the application without root privileges, which is far less dangerous.
+
+
 ## My `lwipopts.h` options file for compiling lwIP 
 > You can find the complete configuration file [in the repository of this example.](https://github.com/devzeb/example_lwip_linux_unix/blob/main/port_configuration/lwip/lwipopts.h)
 
@@ -357,17 +428,10 @@ Your mileage may vary, so feel free to enable it if you want to try it.
 #define LWIP_DBG_TYPES_ON ( LWIP_DBG_ON | LWIP_DBG_TRACE | LWIP_DBG_STATE | LWIP_DBG_FRESH | LWIP_DBG_HALT )
 ```
 
-## Create the TAP device before starting the application (make the application not require root privileges)
-
-## A little bit of background information about TAP / TUN interfaces
-
-From [Wikipedia](https://en.wikipedia.org/wiki/TUN/TAP):
-
-> Packets sent by an operating system via a TUN/TAP device are delivered to a user space program which attaches itself to the device. A user space program may also pass packets into a TUN/TAP device. In this case the TUN/TAP device delivers (or "injects") these packets to the operating-system network stack thus emulating their reception from an external source.
 
 
 
-## Other, apparently unused files that might be useful
+## Other files in the lwIP Unix port directory that might be useful to you
 When browsing through the repository, I found other files that apparently contain alternative lwIP interfaces to the `tapif.c` file.
 
 - [pcapif.c](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/port/netif/pcapif.c)
