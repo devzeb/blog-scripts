@@ -15,22 +15,26 @@ If you like this article and want to support me, you can do so by buying me a co
 
 # Disclaimer
 I have not tested this port on another system than Linux, therefore I cannot guarantee that it will work on any Unix based system.
-The name of the lwIP port is *unix*, so I expect the steps described here to work on other Unix based systems as well.
+The name of the port folder in the official repository contains the word *unix*, so I expect the steps described here to work on any Unix based system.
 
 
 # Motivation
-Usually, lwIP is running on an embedded device. 
+[Lightweight IP (lwIP)](https://savannah.nongnu.org/projects/lwip/) is a network stack that is usually running on embedded devices. 
 If you have ever worked with embedded systems, you are probably familiar with the fact that it is not always easy to debug and test your code on the target system.
 
 Thankfully, lwIP can also be used on Linux or other Unix based systems.
-The *STABLE-2_2_0_RELEASE* tag of the [lwIP GitHub repository](https://github.com/lwip-tcpip/lwip/tree/STABLE-2_2_0_RELEASE) contains a Unix port of lwIP, located in the *contrib/ports/unix* directory.
+This is very useful, as you can test and debug using all the tools that are available on your host system (e.g. sanitizers, better logging, etc.).
+
+In this article, I will show you how to make lwIP work on Linux.
 
 # Environment
 - Linux
-- Clang 16.0.6
+- Clang 16.0.6 (any other compiler should work as well)
 - lwIP version 2.2.0
 
 # How to use lwIP on Linux or other Unix based systems
+The *STABLE-2_2_0_RELEASE* tag of the [lwIP GitHub repository](https://github.com/lwip-tcpip/lwip/tree/STABLE-2_2_0_RELEASE) contains a Unix port of lwIP, located in the *contrib/ports/unix* directory.
+
 The following steps are required to make it work:
 - Configure lwIP by supplying the configuration file `lwipopts.h`
 - Initialize lwIP
@@ -73,17 +77,17 @@ void lwip_init(void){
 ## Configure a TAP network interface and register it as the lwIP default network interface
 
 lwIP needs a (default) network interface to in order to send and receive network packets.
-On Linux / Unix, lwIP uses a so-called *TAP network interface* to communicate with the host system.
+On Linux / Unix, the lwIP port uses a so-called *TAP network interface* to communicate with the host system.
 
 From [Wikipedia](https://en.wikipedia.org/wiki/TUN/TAP):
 
 > Packets sent by an operating system via a TUN/TAP device are delivered to a user space program which attaches itself to the device. A user space program may also pass packets into a TUN/TAP device. In this case the TUN/TAP device delivers (or "injects") these packets to the operating-system network stack thus emulating their reception from an external source.
 
-I will further explain the TAP interface on the host system in [a later section](#what-effect-does-this-have-on-the-host-system).
+I will further explain the effects of adding a TAP interface on the host system in [this section below](#what-happens-on-the-host-system-when-you-create-a-tap-network-interface). But first, let's continue with the implementation.
 
 
 You can register multiple interfaces in lwIP, but only one can be the default interface, which is used for any outgoing packets that do not match a specific (better suited) route.
-Therefore, we need to register a network interface in lwIP and make it default.
+Therefore, we need to add a network interface to lwIP and make it the default interface.
 
 In order to register the default network interface in lwIP, two steps are required:
 - initialize the interface by calling `netif_add`
@@ -92,7 +96,7 @@ In order to register the default network interface in lwIP, two steps are requir
 
 
 ### Implement the network interface initialization function
-I once again used the [example code from the Unix port](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/example_app/default_netif.c) and adapted it to my needs:
+I used [this example code from the Unix port](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/example_app/default_netif.c) and adapted it to my needs.
 
 ```cpp
 void init_default_netif(const ip4_addr_t* ipaddr, 
@@ -119,31 +123,30 @@ This function is invoked by lwIP as soon as the network interface needs to be in
 When `tapif_init` is called, multiple things happen:
 - A new TAP interface is created on the host system. \
 (This operation requires the application to run with root privileges, which is a security concern. There is also the option of creating the TAP device (with root privileges) before starting the application. See [this section](#create-the-tap-device-before-starting-the-application-make-the-application-not-require-root-privileges) for more information.) \
-On Linux, the default device is `/dev/net/tun`, and it has the interface name `tap0`. The default settings can be changed by defining the macros `DEVTAP_DEFAULT_IF` and `DEVTAP` in either `lwipopts.h` or using compiler definitions (through the buildsystem).
+On Linux, the default device-file for the interface is `/dev/net/tun`, and it has the interface name `tap0`. The default settings can be changed by defining the macros `DEVTAP_DEFAULT_IF` and `DEVTAP` in either `lwipopts.h` or using compiler definitions (through the build system).
 - A new thread is started that continuously reads from the TAP device (= polling) and passes the received data to lwIP by calling `tapif_input`.
 
 
-
-See [this file](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/port/netif/tapif.c) for the implementation of the mechanisms described above.
+The implementation of the mechanisms described above can be seen in [this file of the port](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/port/netif/tapif.c).
 
 
 #### Make the file c++ compatible
-Unfortunately, the example code in the latest stable branch 2.2.0 of lwIP is not C++ compatible. I submitted a [pull request](https://github.com/lwip-tcpip/lwip/pull/26) in order to properly fix this issue, but until then, we have to fix it manually in the user code by adding a `extern "C"` block around the include header:
+Unfortunately, the example code of the latest stable branch 2.2.0 of lwIP is not C++ compatible. I submitted a [pull request](https://github.com/lwip-tcpip/lwip/pull/26) in order to properly fix this issue, but until then, we have to fix it manually in the user code by adding a `extern "C"` block around the include header:
 ```cpp
 extern "C" {
     #include "netif/tapif.h"
 }
 ```
 
-if we don't do this, and we include the header in a C++ file, we get the following error:
+If we don't do this, and we include the header in a C++ file, we get the following error:
 ```
 lwip_linux_unix_tap_network_interface.cpp:(.text+0x2f): undefined reference to `tapif_init(netif*)'
 ```
-This is because the compiler thinks that `tapif_init` is a function with c++ linkage, because its header file does not contain the `extern "C"` block.
-As its implementation is in a C file, it actually has C linkage, which makes the linker think that the function is not defined at all.
+The reason for this is, that the compiler thinks `tapif_init` is a function with C++ linkage, because its header file with the function declaration does not contain a `extern "C"` block.
+The function definition is in a C file, so it actually has C linkage. This makes the linker think that the function is not defined at all, because it is looking for a function with C++ linkage.
 
 #### Remove the other functions from the example code
-The other functions `default_netif_poll` and `default_netif_shutdown` are actually not used by lwIP, so I just removed them.
+The other functions `default_netif_poll` and `default_netif_shutdown` from the [example code from the Unix port](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/example_app/default_netif.c) are actually not used by lwIP. It seems that they are dead code, so I just removed them for this example.
 
 ### Invoke the network interface initialization function
 Now that we have implemented the network interface initialization function, we need to invoke it.
@@ -198,11 +201,30 @@ int main()
 }
 ```
 
-I am using a std::array to display the IP address, default gateway and netmask in a human readable format.
+I am using a std::array to display the IP address, default gateway and netmask in a human-readable format.
 
-The functions `ip4_addr_set_u32` are used to fill the actual address from the array.
+The function `ip4_addr_set_u32` is used to fill the actual address from the respective array.
 
-#### What effect does this have on the host system?
+## Set the interface up to start operation
+Finally, we enable the interface in lwIP by calling `netif_set_up`:
+```cpp
+int main()
+{
+    ...
+    LOCK_TCPIP_CORE();
+    ...
+
+    // set the interface up to start operation
+    netif_set_up(&get_default_netif());
+    UNLOCK_TCPIP_CORE();
+
+    ...
+}
+```
+
+This makes lwIP start sending and receiving packets through the TAP interface.
+
+# What happens on the host system when you create a TAP network interface?
 You might be wondering why we have to specify an IP address, default gateway and netmask, even though our host already (probably) has a network configuration?
 
 This is because we are creating the TAP interface, which serves as a completely separate network interface on the host system.
@@ -225,34 +247,17 @@ $ ip addr show
        valid_lft forever preferred_lft forever
 ```
 
-As you can see, the TAP interface named `tap0` has been created and is using the gateway address *192.168.115.1* that we set in the `main` function of our application.
+As you can see, the TAP interface named `tap0` has been created and is using the gateway address *192.168.115.1*, which we set in the `main` function of our application.
 The broadcast address *255.255.255.0* of the TAP interface also matches our configured netmask.
 
 You can also see that the actual IP address of our application is not shown in the output of `ip addr show`. This is expected, because the command only shows the network interface, but not any hosts on these networks.
 
-To sum it up: After the application creates the TAP interface, our host is connected to a new network, which is completely separate from the other host network interfaces. Keep in mind that the gateway address (and netmask) for this interface must not be used by any other network interface on the host system, otherwise the network configuration will be broken.
+To sum it up: When the application creates the TAP interface, it is added to the host system. 
+This makes our system know a route to the network of the TAP interface, which is *192.168.115.0/24* in our case.
+The host will send any IP-packets that are addressed to this network through the TAP interface. 
+Therefore, when we send a packet to the IP address of our application, which is part of the new network, the host will send it through the TAP interface, which is then received by our application.
 
-## Set the interface up to start operation
-Finally, we enable the interface in lwIP by calling `netif_set_up`:
-```cpp
-int main()
-{
-    ...
-    LOCK_TCPIP_CORE();
-    ...
-
-    // set the interface up to start operation
-    netif_set_up(&get_default_netif());
-    UNLOCK_TCPIP_CORE();
-
-    while (true)
-    {
-        // let this thread of execution wait forever (from https://stackoverflow.com/a/42644441 )
-        // the "lwip thread" will continue working in the background
-        std::promise<void>().get_future().wait();
-    }
-}
-```
+Keep in mind that the gateway address (and netmask) for this interface must not be used by any other network interface on the host system, otherwise your network configuration will be broken.
 
 # Check if it works
 
@@ -359,15 +364,14 @@ Note that we still need root privileges to create the TAP interface, but we can 
 > This directory contains an example of how to compile lwIP as a shared library
 on Linux.
 
-The directory also contains a `lwipopts.h` file, which is used to configure the lwIP shared library.
+The directory also contains a `lwipopts.h` file, which is used to configure the lwIP for running on Linux / Unix.
 For this reason, it is a good starting point for our own `lwipopts.h` file.
 
 I made the following modifications to the file:
 
 ### Remove the includes (as they are probably added by mistake)
-Of this file, I first removed the includes, as they seem to be only there by mistake.
-
-The reason why I think it is a copy-paste mistake from the developers is: 
+In this file, I first removed the includes, as they seem to be only there by mistake.
+I believe this is a copy-paste error from the developers, because of this reason: 
 
 Normally in lwIP, the global include file `lwip/opt.h` includes the user-specific configuration `lwipopts.h`.
 In `lwip/opt.h`, you can even find the following comment and includes:
@@ -380,7 +384,9 @@ In `lwip/opt.h`, you can even find the following comment and includes:
 #include "lwip/debug.h"
 ```
 
-But in the `lwipopts.h` file of the Unix port, you can find the exact same comment and includes. This hints that the file probably originally copied from `lwip/opt.h` and then modified to fit the needs of the Unix port. Most likely, the includes were forgotten to be removed.
+But in the `lwipopts.h` file of the Unix port, you can find the exact same comment and includes. This hints that the file was probably originally copied from `lwip/opt.h` and then modified to fit the needs of the Unix port. Most likely, the includes were forgotten to be removed.
+Also, the other `lwipopts.h` files in the lwIP repository do not contain these includes.
+
 I even had trouble compiling the project with the includes in place, which is another hint that they are not supposed to be there. Therefore, I removed the lines from the code example above.
 
 ### Add C++ guards
@@ -400,21 +406,22 @@ extern "C" {
 
 ```
 
-### Enabled the system errno header instead of the lwIP supplied one
-In the past I used lwIP with the Newlib Nano C standard library, where it was mandatory to use the *errno header* from Newlib instead of the lwIP supplied one. 
-This is because Newlib Nano provided a special implementation of the *errno* variable, which made it threadsafe. This mechanism is not present in the lwIP supplied *errno header*.
+### Enable the system errno header instead of the lwIP supplied one
+In the past I used lwIP with the Newlib Nano C standard library. In that use case, it was mandatory to use the *errno header* from Newlib instead of the lwIP supplied one. 
+This is because Newlib Nano provided a special implementation of the *errno* variable, which made it thread safe. This mechanism is not present in the lwIP supplied *errno header*.
 
 So as a rule of thumb, I always use the system supplied *errno header* instead of the lwIP supplied one, when it is available.
 
-As my host system (Linux) supplies a standard library, I also enabled the system errno header by defining
+As my host system (Linux) supplies this header file, I also enabled the system errno header by defining
 ```cpp
 #define LWIP_ERRNO_STDINCLUDE 1
 ```
 
 ### Enable debugging
 For demonstration purposes (and to get everything working in the first place), I enabled all the debugging options. 
+
 The only exception is the `DHCP_DEBUG` option, which I kept disabled from experiences in another project, where the ARP announcement failed when the option was enabled.
-Your mileage may vary, so feel free to enable it if you want to try it.
+I might was mistaken then, or the problem could have been fixed in the meantime, so feel free to enable it if you want to try it.
 ```cpp
 #define LWIP_DEBUG 1
 #define LWIP_DBG_MIN_LEVEL LWIP_DBG_LEVEL_ALL
@@ -428,9 +435,6 @@ Your mileage may vary, so feel free to enable it if you want to try it.
 #define LWIP_DBG_TYPES_ON ( LWIP_DBG_ON | LWIP_DBG_TRACE | LWIP_DBG_STATE | LWIP_DBG_FRESH | LWIP_DBG_HALT )
 ```
 
-
-
-
 ## Other files in the lwIP Unix port directory that might be useful to you
 When browsing through the repository, I found other files that apparently contain alternative lwIP interfaces to the `tapif.c` file.
 
@@ -443,7 +447,7 @@ When browsing through the repository, I found other files that apparently contai
     discards packages sent out from it
 
 This sounds very useful for testing purposes, but it seems to be disabled for Linux. 
-At least [the pcapif.c source file](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/port/netif/pcapif.c) contains the line 
+At least [the pcapif.c source file](https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_0_RELEASE/contrib/ports/unix/port/netif/pcapif.c) contains the following comment:
 ```
 #ifndef linux  /* Apparently, this doesn't work under Linux. */
 ``` 
@@ -451,7 +455,7 @@ At least [the pcapif.c source file](https://github.com/lwip-tcpip/lwip/blob/STAB
 ### vdeif
 This network interface relates to *VirtualSquare*, a project of the [University of Bologna (Italy)](https://www.unibo.it/en).
 
-According to [this readme](https://github.com/virtualsquare/view-os/blob/master/lwipv6/LWIPv6_Programming_Guide).
+According to [this README](https://github.com/virtualsquare/view-os/blob/master/lwipv6/LWIPv6_Programming_Guide).
 
 > LWIPv6 stacks communicate using three different types of interfaces:
 > * ...
@@ -463,7 +467,7 @@ This gives us more information about the terms:
 
 But what is `Virtual Distributed Ethernet`?
 
-According to [this pdf document](http://www.cs.unibo.it/~renzo/virtualsquare/V2.201101.pdf):
+According to [this PDF document](http://www.cs.unibo.it/~renzo/virtualsquare/V2.201101.pdf):
 
 > Virtual Distributed Ethernet is the V2 Virtual Networking project. VDE is a
 Virtual Ethernet, whose nodes can be distributed across the real Internet. The
@@ -475,7 +479,7 @@ And also:
 > VDE is an Ethernet-compliant, virtual network, able to interconnect virtual
 and real machines in a distributed fashion, even if they are hosted on different physical hosts.
 
-Further references:
+Additional references:
 - [Virtual Square Wiki](http://wiki.virtualsquare.org/#/?id=virtual-distributed-ethernet)
 
 - [Debian packages managed by Virtual Square](https://qa.debian.org/developer.php?login=virtualsquare@cs.unibo.it)
